@@ -61,7 +61,8 @@ UpdaterCamera::UpdaterCamera(shared_ptr<State> state) : state(state) {
         Chi.insert({i, make_shared<UpdaterStatistics>(op->chi2_mult, "CAM", i)});
         trackDATABASE.insert({i, make_shared<FeatureDatabase>()});
         trackFEATS.insert(
-            {i, shared_ptr<TrackBase>(new TrackKLT(state->cam_intrinsic_model, op->n_pts, 0, op->use_stereo, op->histogram, op->fast, op->grid_x, op->grid_y, op->min_px_dist))});
+          {i, shared_ptr<TrackBase>(new TrackKLT
+          (state->cam_intrinsic_model, op->n_pts, 0, op->use_stereo, op->histogram, op->fast, op->grid_x, op->grid_y, op->min_px_dist))});
       } else {
         // this is stereo
         // check if we have the system setup for the paired camera
@@ -271,7 +272,6 @@ void UpdaterCamera::msckf_update(V_Feature &vec_features, DB_ptr db_unused) {
   CamHelper::get_imu_poses(state, vec_features, db_unused, imu_poses);
 
   for (auto feat = vec_features.begin(); feat != vec_features.end();) {
-
     // Convert our feature into our current format
     CamFeature cam_feat = CamHelper::create_feature((*feat), state->op->cam->feat_rep);
     // get linear system for this feature
@@ -283,6 +283,7 @@ void UpdaterCamera::msckf_update(V_Feature &vec_features, DB_ptr db_unused) {
     }
 
     // Nullspace projection
+    //?
     StateHelper::nullspace_project_inplace(L.Hf, L.Hx, L.res);
 
     // Get noise covariance R
@@ -302,6 +303,7 @@ void UpdaterCamera::msckf_update(V_Feature &vec_features, DB_ptr db_unused) {
         }
 
         // Append to our large Jacobian
+        // 将有效特征的雅可比矩阵加入大系统
         LL.Hx.block(ct_meas, LL.Hx_mapping[var], L.Hx.rows(), var->size()) = L.Hx.block(0, ct_hx, L.Hx.rows(), var->size());
         ct_hx += var->size();
       }

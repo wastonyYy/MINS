@@ -221,6 +221,7 @@ void SystemManager::compute_accelerations() {
   // Get last two IMU messages
   if (prop->imu_data.size() < 2)
     return;
+  // 获取倒数第二个IMU数据
   auto imu1 = prop->imu_data.end()[-2];
 
   if (!state->have_cpi(imu1.timestamp))

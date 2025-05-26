@@ -479,7 +479,7 @@ void State::build_polynomial_data(bool fej) {
         V_t.block(3 * (p - 1), 3 * (i - 1), 3, 3) = pow(dt_p, i) * Matrix3d::Identity();
       }
     }
-
+    // 6. 求解多项式系数
     // Get inverse
     MatrixXd V_t_inv = V_t.inverse();
 

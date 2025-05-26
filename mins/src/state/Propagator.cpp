@@ -52,6 +52,7 @@ void Propagator::propagate(double timestamp) {
   // Q_summed = Phi_i*Q_summed*Phi_i^T + Q_i
   // After summing we can multiply the total phi to get the updated covariance
   // We will then add the noise to the IMU portion of the state
+  // 对所有状态转换矩阵求和，这样最后就可以进行一次大的乘法运算
 
   // Loop through all IMU messages, and use them to move the state forward in time
   // This uses the zero'th order quat, and then constant acceleration discrete

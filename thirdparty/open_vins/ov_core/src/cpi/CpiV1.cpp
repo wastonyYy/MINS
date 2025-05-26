@@ -43,10 +43,12 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   }
 
   // Get estimated imu readings
+  // 处理测量误差（IMU Bias 补偿）
   Eigen::Matrix<double, 3, 1> w_hat = w_m_0 - b_w_lin;
   Eigen::Matrix<double, 3, 1> a_hat = a_m_0 - b_a_lin;
 
   // If averaging, average
+  // 如果设置了 imu_avg 则进行线性插值平均
   if (imu_avg) {
     w_hat += w_m_1 - b_w_lin;
     w_hat = 0.5 * w_hat;
@@ -55,6 +57,7 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   }
 
   // Get angle change w*dt
+  // 计算角速度的积分项（旋转量）
   Eigen::Matrix<double, 3, 1> w_hatdt = w_hat * delta_t;
 
   // Get entries of w_hat
@@ -83,7 +86,7 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   // MEASUREMENT MEANS
   //==========================================================================
 
-  // Get relative rotation
+  // Get relative rotation Taylor展开 : Rodrigues公式
   Eigen::Matrix<double, 3, 3> R_tau2tau1 = small_w ? eye3 - delta_t * w_x + (pow(delta_t, 2) / 2) * w_x_2
                                                    : eye3 - (sin_wt / mag_w) * w_x + ((1.0 - cos_wt) / (pow(mag_w, 2.0))) * w_x_2;
 
@@ -92,6 +95,7 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   Eigen::Matrix<double, 3, 3> R_tau12k = R_k2tau1.transpose();
 
   // Intermediate variables for evaluating the measurement/bias Jacobian update
+  // 角速度测量和偏置相关的雅可比矩阵更新时使用的中间变量
   double f_1;
   double f_2;
   double f_3;
@@ -110,6 +114,7 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   }
 
   // Compute the main part of our analytical means
+  // 主测量量更新（α、β）
   Eigen::Matrix<double, 3, 3> alpha_arg = ((dt_2 / 2.0) * eye3 + f_1 * w_x + f_2 * w_x_2);
   Eigen::Matrix<double, 3, 3> Beta_arg = (delta_t * eye3 + f_3 * w_x + f_4 * w_x_2);
 

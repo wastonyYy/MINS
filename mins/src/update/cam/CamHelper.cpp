@@ -193,7 +193,7 @@ CamLinSys CamHelper::get_feature_jacobian_full(shared_ptr<State> state, CamFeatu
       Vector2d uv_dist;
       uv_dist = state->cam_intrinsic_model.at(cam_id)->distort_d(uv_norm);
 
-      // Our residual
+      //! Our residual
       Vector2d uv_m;
       uv_m << (double)cam_feat.uvs.at(cam_id).at(m)(0), (double)cam_feat.uvs.at(cam_id).at(m)(1);
       linsys.res.block(2 * c, 0, 2, 1) = uv_m - uv_dist;
@@ -202,11 +202,14 @@ CamLinSys CamHelper::get_feature_jacobian_full(shared_ptr<State> state, CamFeatu
       // Jacobian
       //=========================================================================
       // Get Jacobian of interpolated pose in respect to the state
+      // 获取插值姿态的雅可比矩阵
       vector<MatrixXd> dTdx;
       vector<shared_ptr<ov_type::Type>> order;
       state->get_interpolated_jacobian(tm + dt, R_GtoI, p_IinG, "CAM", cam_id, dTdx, order);
 
       // Compute Jacobians in respect to normalized image coordinates and possibly the camera intrinsics
+      // 计算归一化坐标和畸变参数的雅可比矩阵
+      //!essay 3.2.1
       MatrixXd dz_dzn, dz_dzeta;
       state->cam_intrinsic_model.at(pair.first)->compute_distort_jacobian(uv_norm, dz_dzn, dz_dzeta);
 
@@ -222,6 +225,7 @@ CamLinSys CamHelper::get_feature_jacobian_full(shared_ptr<State> state, CamFeatu
       MatrixXd dp_FinC_dp_FinG = R_ItoC * R_GtoI;
 
       // Derivative of p_FinC in respect to 'interpolated' IMU pose
+      // 计算特征在相机坐标系中的导数
       MatrixXd dp_FinC_dI = MatrixXd::Zero(3, 6);
       dp_FinC_dI.block(0, 0, 3, 3) = R_ItoC * skew_x(p_FinI);
       dp_FinC_dI.block(0, 3, 3, 3) = -dp_FinC_dp_FinG;
@@ -236,6 +240,9 @@ CamLinSys CamHelper::get_feature_jacobian_full(shared_ptr<State> state, CamFeatu
       // Find the LLT of R inverse so that we can efficiently whiten the noise
       //=========================================================================
       // default covariance
+      //  白化的好处就是可以直接丢进优化器里，放心大胆地做最小二乘或高斯牛顿，
+      //  不用担心有的误差特别大，把结果搞歪了。
+      // 计算噪声协方差矩阵
       Eigen::MatrixXd R = pow(state->op->cam->sigma_pix, 2) * Matrix2d::Identity();
       // append interpolated covariance
       if (!state->have_clone(tm + dt)) {
@@ -252,6 +259,7 @@ CamLinSys CamHelper::get_feature_jacobian_full(shared_ptr<State> state, CamFeatu
       }
 
       // Find the LLT of R inverse
+      // linsys.res 是残差向量，乘上 L⁻¹ 实现白化
       MatrixXd R_llt = R.llt().matrixL();
       MatrixXd R_llt_inv = R_llt.llt().solve(MatrixXd::Identity(2, 2));
 
@@ -264,6 +272,8 @@ CamLinSys CamHelper::get_feature_jacobian_full(shared_ptr<State> state, CamFeatu
 
       //=========================================================================
       // Jacobian continues
+      // 把误差值（res）和雅可比矩阵（dz_dp、dz_dzeta）都乘上上面求出来的“变换矩阵”，
+      // 让它们都符合“误差标准差为 1，协方差为单位矩阵”的标准。
       //=========================================================================
       linsys.Hf.block(2 * c, 0, 2, linsys.Hf.cols()).noalias() += dz_dp_FinC * dp_FinC_dp_FinG * dp_FinG_dlambda;
 

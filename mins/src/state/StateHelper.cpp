@@ -123,12 +123,15 @@ bool StateHelper::EKFUpdate(shared_ptr<State> state, const VEC_TYPE &H_order, co
   //==========================================================
   //==========================================================
   // Part of the Kalman Gain K = (P*H^T)*S^{-1} = M*S^{-1}
+  // 1. 参数校验
   assert(res.rows() == R.rows());
   assert(H.rows() == res.rows());
+  // 2. 卡尔曼增益计算准备
   MatrixXd M_a = MatrixXd::Zero(state->cov.rows(), res.rows());
 
   // Get the location in small jacobian for each measuring variable
   int current_it = 0;
+  // 3. 构建雅可比矩阵索引映射
   vector<int> H_id;
   for (const auto &meas_var : H_order) {
     H_id.push_back(current_it);
@@ -138,6 +141,7 @@ bool StateHelper::EKFUpdate(shared_ptr<State> state, const VEC_TYPE &H_order, co
   //==========================================================
   //==========================================================
   // For each active variable find its M = P*H^T
+  // 4. 计算M矩阵（协方差与雅可比转置的乘积）
   for (const auto &var : state->variables) {
     // Sum up effect of each subjacobian = K_i= \sum_m (P_im Hm^T)
     for (size_t i = 0; i < H_order.size(); i++) {
@@ -153,21 +157,25 @@ bool StateHelper::EKFUpdate(shared_ptr<State> state, const VEC_TYPE &H_order, co
   MatrixXd P_small = StateHelper::get_marginal_covariance(state, H_order);
 
   // Residual covariance S = H*Cov*H' + R
+  // 5. 残差协方差 S
   MatrixXd S(R.rows(), R.rows());
   S.triangularView<Upper>() = H * P_small * H.transpose();
   S.triangularView<Upper>() += R;
 
-  // Compute Kalman gain
+  // Compute Kalman 
+  // 6. 计算卡尔曼增益 K
   MatrixXd Sinv = MatrixXd::Identity(R.rows(), R.rows());
   S.selfadjointView<Upper>().llt().solveInPlace(Sinv);
   MatrixXd K = M_a * Sinv.selfadjointView<Upper>();
-
   // dx, dx_Cov
+  // 状态修正量
   VectorXd dx = K * res;
+  // 协方差修正量
   MatrixXd dx_Cov(state->cov.rows(), state->cov.rows());
   dx_Cov.triangularView<Upper>() = (K * M_a.transpose());
 
   // We should check if we are not positive semi-definitate
+  // 协方差正定性检查
   VectorXd diag1 = state->cov.diagonal();
   VectorXd diag2 = dx_Cov.diagonal();
   assert(diag1.rows() == diag2.rows());
@@ -179,15 +187,18 @@ bool StateHelper::EKFUpdate(shared_ptr<State> state, const VEC_TYPE &H_order, co
   }
 
   // Update Covariance
+  // 9. 更新协方差矩阵
   state->cov.triangularView<Upper>() -= dx_Cov;
   state->cov.triangularView<Lower>() = state->cov.triangularView<Upper>().transpose();
 
   // Calculate our delta and update all our active states
+  // 10. 更新状态变量
   for (auto &variable : state->variables)
     variable->update(dx.block(variable->id(), 0, variable->size(), 1));
 
   // If we are doing online intrinsic calibration we should update our camera objects
   // NOTE: is this the best place to put this update logic??? probably..
+  // 11. 相机内参更新
   if (state->op->cam->do_calib_int) {
     for (auto const &calib : state->cam_intrinsic) {
       state->cam_intrinsic_model.at(calib.first)->set_value(calib.second->value());
@@ -195,6 +206,7 @@ bool StateHelper::EKFUpdate(shared_ptr<State> state, const VEC_TYPE &H_order, co
   }
 
   // build est polynomial for the new state when not using imu prediction
+  // 12. 多项式预测更新
   state->op->use_imu_res ? void() : state->build_polynomial_data(false);
   return true;
 }
@@ -276,6 +288,12 @@ void StateHelper::marginalize(shared_ptr<State> state, shared_ptr<Type> marg) {
   //  P_(x_2,x_1) P(x_2,x_2)
   //
   // i.e. x_1 goes from 0 to marg_id, x_2 goes from marg_id+marg_size to Cov.rows() in the original covariance
+
+  // 将原协方差矩阵中与marg无关的部分复制到Cov_new中：
+  //   P_(x_1,x_1)：保留marg之前的变量之间的协方差。
+  //   P_(x_1,x_2)：保留marg之前的变量与marg之后的变量之间的协方差。
+  //   P_(x_2,x_1)：保留marg之后的变量与marg之前的变量之间的协方差。
+  //   P(x_2,x_2)：保留marg之后的变量之间的协方差。
 
   int marg_size = marg->size();
   int marg_id = marg->id();

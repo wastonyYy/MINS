@@ -71,6 +71,8 @@ public:
   ~State() {}
 
   /// CPI information struct
+  // CPI 用于保存某一时刻与参考时间（克隆时间）之间的 相对状态信息，包括姿态（旋转）、位移（加速度积分）、协方差（不确定性），以及速度与偏置。
+  // 在滑动窗口滤波器或优化器中，这些信息常用于构造约束（constraints），便于在后端优化中进行状态更新。
   struct CPI {
     // Time of this information
     double t = -1;
