@@ -100,8 +100,10 @@ bool SystemManager::feed_measurement_imu(const ov_core::ImuData &imu) {
     // Propagate the state to clone time
     prop->propagate(clone_time);
     // Stochastic cloning
+    // 在状态中追加新的克隆姿态（用于处理多传感器时间对齐问题）
     StateHelper::augment_clone(state);
     // Handle lidar map frame if enabled. Propagate map frame to the newest clone time
+    // 若果有lidar 将地图传播到最新的克隆时间
     state->op->lidar->enabled ? up_ldr->propagate_map_frame() : void();
     // Marginalization
     StateHelper::marginalize_old_clone(state);
@@ -275,6 +277,7 @@ bool SystemManager::get_next_clone_time(double &clone_time, double meas_t) {
   }
 
   // Change the clone hz and interpolation order if dynamic cloning is enabled
+  // 动态调整克隆参数
   compute_accelerations();
   int freq = state->op->clone_freq;
   int intr = state->op->intr_order;
@@ -302,11 +305,12 @@ bool SystemManager::get_next_clone_time(double &clone_time, double meas_t) {
   if (state->op->cam->enabled) {
     for (auto meas : up_cam->t_hist) {
       for (auto t = meas.second.rbegin(); t != meas.second.rend(); ++t) {
-        double sensor_t = *t + state->cam_dt.at(meas.first)->value()(0);
+        double sensor_t = *t + state->cam_dt.at(meas.first)->value()(0); /// 传感器时间偏移
         if (newest_clone_t < sensor_t)
           have_meas = true;
-        if (sensor_t < clone_time - 0.1 / freq)
+        if (sensor_t < clone_time - 0.1 / freq) /// 时间窗口检查 (-10%频率范围)
           break;
+        // 寻找最近有效时间
         if (abs(sensor_t - clone_time) < min_t_diff && sensor_t >= state->time) {
           min_t_diff = abs(sensor_t - clone_time);
           tmp_clone_time = sensor_t;

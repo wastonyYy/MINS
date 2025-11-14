@@ -44,6 +44,8 @@ using namespace mins;
 using namespace std;
 using namespace Eigen;
 
+// https://zhuanlan.zhihu.com/p/386373911
+// 核心功能：实现扩展卡尔曼滤波的协方差传播
 void StateHelper::EKFPropagation(shared_ptr<State> state, const VEC_TYPE &order_NEW, const VEC_TYPE &order_OLD, const MatrixXd &Phi, const MatrixXd &Q) {
 
   // We need at least one old and new variable
@@ -85,6 +87,7 @@ void StateHelper::EKFPropagation(shared_ptr<State> state, const VEC_TYPE &order_
 
   // Loop through all our old states and get the state transition times it
   // Cov_PhiT = [ Pxx ] [ Phi' ]'
+  //? 下面是要从Pk|k转换到Pk+1|k
   MatrixXd Cov_PhiT = MatrixXd::Zero(state->cov.rows(), Phi.rows());
   for (size_t i = 0; i < order_OLD.size(); i++) {
     shared_ptr<Type> var = order_OLD[i];
@@ -92,6 +95,7 @@ void StateHelper::EKFPropagation(shared_ptr<State> state, const VEC_TYPE &order_
   }
 
   // Get Phi_NEW*Covariance*Phi_NEW^t + Q
+  // 计算协方差矩阵
   MatrixXd Phi_Cov_PhiT = Q.selfadjointView<Upper>();
   for (size_t i = 0; i < order_OLD.size(); i++) {
     shared_ptr<Type> var = order_OLD[i];
@@ -99,6 +103,7 @@ void StateHelper::EKFPropagation(shared_ptr<State> state, const VEC_TYPE &order_
   }
 
   // We are good to go!
+  //! 扩展总的状态协方差矩阵
   int start_id = order_NEW.at(0)->id();
   int phi_size = Phi.rows();
   int total_size = state->cov.rows();
@@ -268,7 +273,7 @@ MatrixXd StateHelper::get_marginal_covariance(shared_ptr<State> state, const VEC
 MatrixXd StateHelper::get_full_covariance(shared_ptr<State> state) { return state->cov; }
 
 void StateHelper::marginalize(shared_ptr<State> state, shared_ptr<Type> marg) {
-
+  // step 1 确认状态中是否有slam特征点landmark
   // Check if the current state has the element we want to marginalize
   if (find(state->variables.begin(), state->variables.end(), marg) == state->variables.end()) {
     PRINT4(RED "StateHelper::marginalize() - Called on variable that is not in the state\n" RESET);
@@ -295,6 +300,7 @@ void StateHelper::marginalize(shared_ptr<State> state, shared_ptr<Type> marg) {
   //   P_(x_2,x_1)：保留marg之后的变量与marg之前的变量之间的协方差。
   //   P(x_2,x_2)：保留marg之后的变量之间的协方差。
 
+  // step 2 直接在协方差矩阵中去除slam特征点对应的协方差块
   int marg_size = marg->size();
   int marg_id = marg->id();
   int x2_size = (int)state->cov.rows() - marg_id - marg_size;
@@ -319,6 +325,7 @@ void StateHelper::marginalize(shared_ptr<State> state, shared_ptr<Type> marg) {
   // state->Cov() = 0.5*(Cov_new+Cov_new.transpose());
   assert(state->cov.rows() == Cov_new.rows());
 
+  // step 3 去除VIO状态中的被marg的量，重新调整
   // Now we keep the remaining variables and update their ordering
   // Note: DOES NOT SUPPORT MARGINALIZING SUBVARIABLES YET!!!!!!!
   VEC_TYPE remaining_variables;
@@ -596,21 +603,26 @@ void StateHelper::augment_clone(shared_ptr<State> state) {
 
   // Call on our cloner and add it to our vector of types
   // NOTE: this will clone the clone pose to the END of the covariance...
+  // 克隆当前IMU姿态（核心操作：扩展协方差矩阵，复制状态变量）
   shared_ptr<Type> posetemp = StateHelper::clone(state, state->imu->pose());
 
   // Cast to a JPL pose type, check if valid
+  // 类型转换检查（确保克隆的是JPL姿态类型）
   shared_ptr<PoseJPL> pose = dynamic_pointer_cast<PoseJPL>(posetemp);
   if (pose == nullptr) {
     PRINT4(RED "INVALID OBJECT RETURNED FROM STATEHELPER CLONE, EXITING!#!@#!@#\n" RESET);
     exit(EXIT_FAILURE);
   }
 
-  // Append the new clone to our clone vector
+  // Append the new clone to our clone 
+  // 将新克隆姿态加入状态管理系统（维护滑动窗口）
   state->clones[state->time] = pose;
 
   // build est polynomial for the new state when not using imu prediction
+  // 不使用IMU预测时构建多项式轨迹
   state->op->use_imu_res ? void() : state->build_polynomial_data(false);
 
+  // 添加多项式参数（用于运动轨迹建模）
   state->add_polynomial();
 }
 void StateHelper::marginalize_slam(shared_ptr<State> state) {
@@ -631,6 +643,7 @@ void StateHelper::marginalize_old_clone(shared_ptr<State> state) {
     assert(marginal_time != -INFINITY);
 
     // check if we want to make this keyframe
+    // 关键帧决策逻辑：检查是否需要保留当前克隆作为关键帧
     auto idx = find(state->keyframes_candidate.begin(), state->keyframes_candidate.end(), marginal_time);
     if (idx != state->keyframes_candidate.end()) {
       state->keyframes.push_back(marginal_time);

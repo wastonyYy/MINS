@@ -100,7 +100,7 @@ bool Initializer::try_initializtion() {
     tc->counter++;
   }
   // IMU information to be initialized
-  Matrix<double, 17, 1> imustate;
+  Matrix<double, 17, 1> imustate;  // 存储IMU初始状态(时间戳+16维状态)
   bool init_success;
   if (state->op->init->use_gt) // perform ground truth initialization
     init_success = gt_initialization(imustate);
@@ -217,12 +217,12 @@ void Initializer::set_state(Matrix<double, 17, 1> imustate) {
 
   // Initialize the system
   state->imu->set_value(imustate.block(1, 0, 16, 1));
-  state->imu->set_fej(imustate.block(1, 0, 16, 1));
+  state->imu->set_fej(imustate.block(1, 0, 16, 1)); /// 设置FEJ状态（用于雅可比计算）
 
   // Fix the global yaw and position gauge freedoms
   vector<shared_ptr<ov_type::Type>> order = {state->imu};
   MatrixXd Cov = state->op->init->cov_size * MatrixXd::Identity(state->imu->size(), state->imu->size());
-  StateHelper::set_initial_covariance(state, Cov, order);
+  StateHelper::set_initial_covariance(state, Cov, order); /// 设置初始协方差
 
   // Make velocity uncertainty a bit bigger
   //    state->cov.block(state->imu->v()->id(), state->imu->v()->id(), 3, 3) *= 2;

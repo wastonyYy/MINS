@@ -43,6 +43,7 @@ Propagator::Propagator(shared_ptr<State> state) : state(state) {}
 
 void Propagator::propagate(double timestamp) {
   // First lets construct an IMU vector of measurements we need
+  // 步骤1：获取需要传播的IMU数据区间
   vector<ImuData> data;
   if (!select_imu_readings(state->time, timestamp, data))
     return;
@@ -59,11 +60,15 @@ void Propagator::propagate(double timestamp) {
   Matrix15 Phi_summed = Matrix15::Identity();
   Matrix15 Qd_summed = Matrix15::Zero();
   Matrix3d R_GtoIk = state->imu->Rot();
+  // 步骤3：遍历IMU数据进行传播
   for (size_t i = 0; i < data.size() - 1; i++) {
 
     // Get the next state Jacobian and noise Jacobian for this IMU reading
     Matrix15 F = Matrix15::Zero();
     Matrix15 Qdi = Matrix15::Zero();
+    // 离散形式下的状态向量预测
+    // 获得状态雅可比矩阵和噪声雅克比矩阵
+    // 精度积分预测和误差传播，为后续滤波器预测步骤准备准确的状态均值 + 协方差传播模型（F 和 Qd）
     predict_and_compute(data[i], data[i + 1], F, Qdi);
     // Next we should propagate our IMU covariance
     // Pii' = F*Pii*F.transpose() + G*Q*G.transpose()
@@ -103,7 +108,7 @@ void Propagator::propagate(double timestamp) {
   // Set timestamp data
   state->time = timestamp;
 }
-
+// 对任意时间段 [time0, time1] 内 IMU 数据的提取和补全（包含边界点的插值）
 bool Propagator::select_imu_readings(double time0, double time1, vector<ImuData> &prop_data) {
 
   // Ensure we have some measurements in the first place!
@@ -165,18 +170,22 @@ bool Propagator::select_imu_readings(double time0, double time1, vector<ImuData>
   // Success :D
   return true;
 }
-
+// 精度积分预测和误差传播，为后续滤波器预测步骤准备准确的状态均值 + 协方差传播模型（F 和 Qd）
 void Propagator::predict_and_compute(const ImuData &data_minus, const ImuData &data_plus, Matrix15 &F, Matrix15 &Qd) {
 
   // Set them to zero
+  //重置状态雅克比矩阵
+  //重置噪声雅克比矩阵
   F.setZero();
   Qd.setZero();
 
   // Time elapsed over interval
+  // 获取时间间隔
   double dt = data_plus.timestamp - data_minus.timestamp;
   // assert(data_plus.timestamp>data_minus.timestamp);
 
   // Corrected IMU measurements
+  // 校正当前imu量测
   Vector3d w_hat = data_minus.wm - state->imu->bias_g();
   Vector3d a_hat = data_minus.am - state->imu->bias_a();
   Vector3d w_hat2 = data_plus.wm - state->imu->bias_g();
@@ -185,9 +194,11 @@ void Propagator::predict_and_compute(const ImuData &data_minus, const ImuData &d
   // Compute the new state mean value
   Vector4d new_q;
   Vector3d new_v, new_p;
+  // 使用四阶龙格库塔进行积分
   predict_mean_rk4(state->imu, dt, w_hat, a_hat, w_hat2, a_hat2, new_q, new_v, new_p);
 
   // Get the locations of each entry of the IMU state
+  // 取当前变量的索取id
   int th_id = state->imu->q()->id() - state->imu->id();
   int p_id = state->imu->p()->id() - state->imu->id();
   int v_id = state->imu->v()->id() - state->imu->id();
@@ -200,6 +211,7 @@ void Propagator::predict_and_compute(const ImuData &data_minus, const ImuData &d
   // Now compute Jacobian of new state wrt old state and noise
   // This is the change in the orientation from the end of the last prop to the current prop
   // This is needed since we need to include the "k-th" updated orientation information
+  //! 与openvins相比只有fej部分
   Matrix<double, 3, 3> Rfej = state->imu->Rot_fej();
   Matrix<double, 3, 3> dR = quat_2_Rot(new_q) * Rfej.transpose();
 
@@ -249,7 +261,7 @@ void Propagator::predict_and_compute(const ImuData &data_minus, const ImuData &d
   state->imu->set_value(imu_x);
   state->imu->set_fej(imu_x);
 }
-
+// 四阶龙格-库塔 预测imu
 void Propagator::predict_mean_rk4(shared_ptr<ov_type::IMU> imu, double dt, const Vector3d &w_hat1, const Vector3d &a_hat1, const Vector3d &w_hat2, const Vector3d &a_hat2,
                                   Vector4d &new_q, Vector3d &new_v, Vector3d &new_p) {
 
@@ -323,7 +335,7 @@ void Propagator::predict_mean_rk4(shared_ptr<ov_type::IMU> imu, double dt, const
   Vector3d k4_p = p3_dot * dt;
   Vector3d k4_v = v3_dot * dt;
 
-  // y+dt ================
+  //! y+dt ================
   Vector4d dq = quatnorm(dq_0 + (1.0 / 6.0) * k1_q + (1.0 / 3.0) * k2_q + (1.0 / 3.0) * k3_q + (1.0 / 6.0) * k4_q);
   new_q = quat_multiply(dq, q_0);
   new_p = p_0 + (1.0 / 6.0) * k1_p + (1.0 / 3.0) * k2_p + (1.0 / 3.0) * k3_p + (1.0 / 6.0) * k4_p;
@@ -374,6 +386,7 @@ ImuData Propagator::interpolate_data(const ImuData &imu_1, const ImuData &imu_2,
 
 void Propagator::reset_cpi(double clone_t) {
   // make sure we have the clone in our state
+  // 1. 存在性检查：确保克隆时间有效
   if (!state->have_clone(clone_t)) {
     PRINT4(RED "Requested to reset CPI at non-existing clone time (%.4f)!\n" RESET, clone_t);
     state->print_info();
@@ -381,10 +394,12 @@ void Propagator::reset_cpi(double clone_t) {
   }
 
   // reset CPI class
+  // 2. 预积分器重置：
   cpiv1 = make_shared<CpiV1>(state->op->imu->sigma_w, state->op->imu->sigma_wb, state->op->imu->sigma_a, state->op->imu->sigma_ab, true);
   cpiv1->setLinearizationPoints(state->imu->bias_g(), state->imu->bias_a());
   cpi_clone_t = clone_t;
 
+  // 3. CPI数据结构reset：
   // reset the CPI info we have at this clone time.
   State::CPI cpi;
   cpi.t = clone_t;
@@ -394,8 +409,10 @@ void Propagator::reset_cpi(double clone_t) {
   cpi.bg = state->imu->bias_g();
   cpi.ba = state->imu->bias_a();
   // erase the cpi value if we have it
+  // 4. 历史数据继承：保留原有角速度信息（若存在）
   if (state->have_cpi(clone_t)) {
     cpi.w = state->cpis.at(clone_t).w;
   }
+  // 5. 数据存储：更新全局CPI信息
   state->cpis[cpi.t] = cpi;
 }

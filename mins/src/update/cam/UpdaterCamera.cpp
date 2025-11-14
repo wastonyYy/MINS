@@ -51,15 +51,17 @@ UpdaterCamera::UpdaterCamera(shared_ptr<State> state) : state(state) {
   // Let's make a feature extractor and other setups
   for (int i = 0; i < op->max_n; i++) {
     // check if we have the trackDATABASE for this camera
+    // 检查是否已初始化该相机的特征数据库
     if (trackDATABASE.find(i) == trackDATABASE.end()) {
       // not found
       // check if this is stereo camera
       if (!op->use_stereo || op->stereo_pairs.find(i) == op->stereo_pairs.end()) {
         // this is mono
         // Set up the system
-        t_hist.insert({i, deque<double>()});
-        Chi.insert({i, make_shared<UpdaterStatistics>(op->chi2_mult, "CAM", i)});
-        trackDATABASE.insert({i, make_shared<FeatureDatabase>()});
+        t_hist.insert({i, deque<double>()}); /// 时间戳队列
+        Chi.insert({i, make_shared<UpdaterStatistics>(op->chi2_mult, "CAM", i)}); /// 卡方检验器
+        trackDATABASE.insert({i, make_shared<FeatureDatabase>()}); /// 特征数据库
+        // KLT特征跟踪器
         trackFEATS.insert(
           {i, shared_ptr<TrackBase>(new TrackKLT
           (state->cam_intrinsic_model, op->n_pts, 0, op->use_stereo, op->histogram, op->fast, op->grid_x, op->grid_y, op->min_px_dist))});
@@ -103,6 +105,7 @@ void UpdaterCamera::feed_measurement(const ov_core::CameraData &camdata) {
     assert(camdata.sensor_ids.at(i) != camdata.sensor_ids.at(i + 1));
   }
   // Downsample if we are downsampling
+  // 下采样
   ov_core::CameraData message = camdata;
   for (size_t i = 0; i < message.sensor_ids.size() && state->op->cam->downsample; i++) {
     cv::Mat img = message.images.at(i);
@@ -115,17 +118,20 @@ void UpdaterCamera::feed_measurement(const ov_core::CameraData &camdata) {
   }
 
   // record timestamps
+  // 时间戳队列管理（滑动窗口机制）
   for (auto cam_id : camdata.sensor_ids) {
     t_hist.at(cam_id).size() > 100 ? t_hist.at(cam_id).pop_front() : void(); // remove if we have too many
     t_hist.at(cam_id).push_back(camdata.timestamp);
   }
 
   // Perform our feature tracking!
+  // 核心特征跟踪流程
   int cam_id = message.sensor_ids.at(0);
-  trackFEATS.at(cam_id)->feed_new_camera(message);
-  trackDATABASE.at(cam_id)->append_new_measurements(trackFEATS.at(cam_id)->get_feature_database());
+  trackFEATS.at(cam_id)->feed_new_camera(message); // 特征提取与跟踪
+  trackDATABASE.at(cam_id)->append_new_measurements(trackFEATS.at(cam_id)->get_feature_database()); // 更新特征数据库
 
   // Marginalize lost-track SLAM features
+  // SLAM特征维护：边缘化丢失追踪的特征
   marginalize_slam_features(camdata);
   tc->dingdong("[Time-Cam] feed measurement");
 }

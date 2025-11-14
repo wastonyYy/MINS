@@ -52,6 +52,7 @@ bool I_Initializer::initialization(Matrix<double, 17, 1> &imustate) {
   double oldesttime = imu_pp->imu_data.front().timestamp;
 
   // Return if we don't have enough for two windows
+  // 2 * op->init->window_time = 2 * 1s = 2s
   if (newesttime - oldesttime < 2 * op->init->window_time) {
     PRINT0(YELLOW "[INIT-IMU]: unable to select window of IMU readings, not enough readings\n" RESET);
     return false;
@@ -61,10 +62,10 @@ bool I_Initializer::initialization(Matrix<double, 17, 1> &imustate) {
   std::vector<ImuData> window_1to0, window_2to1;
   for (const ImuData &data : imu_pp->imu_data) {
     if (data.timestamp > newesttime - 1 * op->init->window_time && data.timestamp <= newesttime - 0 * op->init->window_time) {
-      window_1to0.push_back(data);
+      window_1to0.push_back(data); /// 后半段时间窗口数据
     }
     if (data.timestamp > newesttime - 2 * op->init->window_time && data.timestamp <= newesttime - 1 * op->init->window_time) {
-      window_2to1.push_back(data);
+      window_2to1.push_back(data); /// 前半段时间窗口数据
     }
   }
 

@@ -123,8 +123,9 @@ void CpiV1::feed_IMU(double t_0, double t_1, Eigen::Matrix<double, 3, 1> w_m_0, 
   Eigen::MatrixXd H_be = R_tau12k * Beta_arg;
 
   // Update the measurement means
-  alpha_tau += beta_tau * delta_t + H_al * a_hat;
-  beta_tau += H_be * a_hat;
+  // 预积分量更新
+  alpha_tau += beta_tau * delta_t + H_al * a_hat; /// 位置预积分
+  beta_tau += H_be * a_hat;   /// 速度预积分
 
   //==========================================================================
   // BIAS JACOBIANS (ANALYTICAL)

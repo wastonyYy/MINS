@@ -173,11 +173,13 @@ bool UpdaterLidar::update(std::shared_ptr<LiDARData> lidar, shared_ptr<iKDDATA> 
   unordered_map<shared_ptr<Type>, size_t> map_hx;
 
   // Our calibrations
+  // 获取标定参数（外参和时间偏移）
   shared_ptr<PoseJPL> calibration = state->lidar_extrinsic.at(lidar->id);
   shared_ptr<Vec> timeoffset = state->lidar_dt.at(lidar->id);
   double dt = timeoffset->value()(0);
 
   // Add to state map if doing calibration
+  // 将需要标定的参数加入状态向量
   state->op->lidar->do_calib_ext ? StateHelper::insert_map({calibration}, map_hx, H_order, total_hx) : void();
   state->op->lidar->do_calib_dt ? StateHelper::insert_map({timeoffset}, map_hx, H_order, total_hx) : void();
 
@@ -187,6 +189,7 @@ bool UpdaterLidar::update(std::shared_ptr<LiDARData> lidar, shared_ptr<iKDDATA> 
   vector<MatrixXd> dTdxI, dTdxA;
   VecTypePtr orderI, orderA;
 
+  // 获取插值雅可比矩阵（用于处理非克隆时刻的状态）
   if (!state->get_interpolated_jacobian(lidar->time + dt, RGtoI_fej, pIinG_fej, "LIDAR", lidar->id, dTdxI, orderI))
     return false;
 
@@ -220,6 +223,7 @@ bool UpdaterLidar::update(std::shared_ptr<LiDARData> lidar, shared_ptr<iKDDATA> 
   // Precomputed Transformations
   //=========================================================================
   // calib info
+  // 计算各坐标系间的变换关系
   Matrix3d RItoL_est = calibration->Rot();
   Matrix3d RLtoI_est = RItoL_est.transpose();
   Vector3d pIinL_est = calibration->pos();
@@ -230,6 +234,7 @@ bool UpdaterLidar::update(std::shared_ptr<LiDARData> lidar, shared_ptr<iKDDATA> 
   Vector3d pLinI_fej = -RLtoI_fej * pIinL_fej;
 
   // New LiDAR frame
+  // 计算新LiDAR帧和地图帧之间的变换关系
   Matrix3d RGtoL_est = RItoL_est * RGtoI_est;
   Matrix3d RLtoG_est = RGtoL_est.transpose();
   Vector3d pLinG_est = pIinG_est + RGtoI_est.transpose() * pLinI_est;
@@ -266,6 +271,7 @@ bool UpdaterLidar::update(std::shared_ptr<LiDARData> lidar, shared_ptr<iKDDATA> 
   vector<pair<VectorXd, MatrixXd>> vec_lin(lidar->size());
 
   // Loop Threads
+  // 创建多线程处理点云数据
   int num_threads = std::thread::hardware_concurrency(); // Number of threads to use
   num_threads = (num_threads < 4 ? 4 : num_threads);     // at least 4 threads
   int chunk_size = lidar->size() / num_threads;          // Chunk size for each thread
@@ -276,8 +282,10 @@ bool UpdaterLidar::update(std::shared_ptr<LiDARData> lidar, shared_ptr<iKDDATA> 
     t == num_threads - 1 ? end = lidar->size() : int(); // Last thread takes the remaining elements
     threads.emplace_back([&, start, end] {
       // Loop points of the new scan
+      // 每个线程处理一部分点云数据
       for (int i = start; i < end; i++) {
         // Get this point from new scan.
+        // 点云转换到地图坐标系
         Vector3d pfinL = lidar->p(i);
         Vector3d pfinM_est = pLinM_est + RLtoM_est * pfinL;
         Vector3d pfinM_fej = pLinM_fej + RLtoM_fej * pfinL;
@@ -288,6 +296,7 @@ bool UpdaterLidar::update(std::shared_ptr<LiDARData> lidar, shared_ptr<iKDDATA> 
           continue;
 
         // Get plane coefficients from neighbors
+        // 获取邻近点构建平面
         Vector4d plane_abcd;
         if (!LidarHelper::compute_plane(plane_abcd, neighbors_inM, state->op->lidar))
           continue;
@@ -304,6 +313,7 @@ bool UpdaterLidar::update(std::shared_ptr<LiDARData> lidar, shared_ptr<iKDDATA> 
 
         for (int j = 0; j < state->op->lidar->map_ngbr_num; j++) {
           // residual of neighboring map points: res = 0 - (ax+by+cz+d)
+          // 残差计算（平面方程 ax+by+cz+d=0）
           Vector3d pninM(neighbors_inM->points[j].x, neighbors_inM->points[j].y, neighbors_inM->points[j].z);
           res(j) = -plane_abcd.head(3).transpose() * pninM - plane_abcd(3);
           dz_dplane_abc.block(j, 0, 1, 3) = pninM.transpose();
@@ -317,8 +327,13 @@ bool UpdaterLidar::update(std::shared_ptr<LiDARData> lidar, shared_ptr<iKDDATA> 
         // Jacobian
         //=========================================================================
         // Jacobians in respect to interpolated poses and extrinsic
+        // essay (34)
         Matrix<double, 1, 3> dz_dpfinM_bottom_row = plane_abcd.head(3).transpose();
         Matrix<double, 3, 6> dpfinM_dI = Matrix<double, 3, 6>::Zero();
+        // 对状态I的雅可比(插值位姿)
+        // dpfinM_dI 对IMU位姿的导数
+        // dpfinM_dA 对地图锚点的导数
+        // dpfinM_dcalib 对外参的导数
         dpfinM_dI.block(0, 0, 3, 3) = -RGtoM_fej * RItoG_fej * skew_x(RLtoI_fej * (pfinL - pIinL_fej));
         dpfinM_dI.block(0, 3, 3, 3) = RGtoM_fej;
         Matrix<double, 3, 6> dpfinM_dA = Matrix<double, 3, 6>::Zero();
@@ -332,6 +347,7 @@ bool UpdaterLidar::update(std::shared_ptr<LiDARData> lidar, shared_ptr<iKDDATA> 
         double intr_std = 0.0;
         if (!at_clone_m || !at_clone_a) {
           MatrixXd dpfinM_dIntr = (at_clone_m ? MatrixXd::Zero(3, 6) : dpfinM_dI) + (at_clone_a ? MatrixXd::Zero(3, 6) : dpfinM_dA);
+          // !!!!!!!!!!!!
           MatrixXd HI = dz_dpfinM_bottom_row * dpfinM_dI;
           intr_std += sqrt(ie_o * (pow(HI(0), 2) + pow(HI(1), 2) + pow(HI(2), 2)) + ie_p * (pow(HI(3), 2) + pow(HI(4), 2) + pow(HI(5), 2)));
         }
@@ -339,6 +355,7 @@ bool UpdaterLidar::update(std::shared_ptr<LiDARData> lidar, shared_ptr<iKDDATA> 
         //=========================================================================
         // Jacobian continues
         //=========================================================================
+        //!
         MatrixXd H = MatrixXd::Zero(row_size, total_hx);
         for (int j = 0; j < (int)dTdxI.size(); j++)
           H.block(row_size - 1, map_hx.at(orderI.at(j)), 1, orderI.at(j)->size()).noalias() += dz_dpfinM_bottom_row * dpfinM_dI * dTdxI.at(j);
@@ -350,6 +367,7 @@ bool UpdaterLidar::update(std::shared_ptr<LiDARData> lidar, shared_ptr<iKDDATA> 
           H.block(row_size - 1, map_hx.at(calibration), 1, calibration->size()).noalias() += dz_dpfinM_bottom_row * dpfinM_dcalib;
 
         // Whiten the noise
+        // 噪声白化处理（考虑原始测量噪声和插值误差）
         double raw_noise = plane_abcd.head(3).norm() * state->op->lidar->raw_noise + intr_std;
         double map_noise = plane_abcd.head(3).norm() * state->op->lidar->map_noise + intr_std;
         H.block(row_size - 1, 0, 1, total_hx) /= raw_noise;
@@ -359,6 +377,7 @@ bool UpdaterLidar::update(std::shared_ptr<LiDARData> lidar, shared_ptr<iKDDATA> 
         res.head(state->op->lidar->map_ngbr_num) /= map_noise;
 
         // Nullspace projection
+        // 空投影消除不可观维度
         StateHelper::nullspace_project_inplace(dz_dplane_abc, H, res);
 
         // Chi2 test
@@ -382,6 +401,7 @@ bool UpdaterLidar::update(std::shared_ptr<LiDARData> lidar, shared_ptr<iKDDATA> 
   }
 
   // Construct Big residual and Jacobian
+  // 合并所有线程结果
   VectorXd res_big = VectorXd::Zero(total_res);
   MatrixXd H_big = MatrixXd::Zero(total_res, total_hx);
   int cnt = 0;
@@ -394,6 +414,7 @@ bool UpdaterLidar::update(std::shared_ptr<LiDARData> lidar, shared_ptr<iKDDATA> 
   }
 
   // 5. Perform measurement compression
+  // 测量压缩（降低计算复杂度）
   StateHelper::measurement_compress_inplace(H_big, res_big);
   if (H_big.rows() < 1)
     return false;
@@ -403,6 +424,7 @@ bool UpdaterLidar::update(std::shared_ptr<LiDARData> lidar, shared_ptr<iKDDATA> 
 
   // 6. With all good features update the state
   //  chi->Chi2Check(StateHelper::get_marginal_covariance(state, H_order), H_big, res_big, R_big, LIDAR, lidar->id, false);
+  // 执行EKF更新
   StateHelper::EKFUpdate(state, H_order, H_big, res_big, R_big, "LIDAR");
   return true;
 }

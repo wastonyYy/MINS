@@ -58,7 +58,7 @@ State::State(shared_ptr<OptionsEstimator> op, std::shared_ptr<Simulator> sim) : 
   imu = make_shared<ov_type::IMU>();
   imu->set_local_id(current_id);
   variables.push_back(imu);
-  current_id += imu->size();
+  current_id += imu->size(); // 索引后移15位16？
 
   // set camera state
   if (op->cam->enabled)
@@ -280,8 +280,9 @@ void State::set_wheel_state(int &current_id) {
   }
 }
 
+// 为每个激光雷达初始化时间和外参状态
 void State::set_lidar_state(int &current_id) {
-  // Loop through each camera and create timeoffset, extrinsic, and intrinsic
+  // Loop through each lidar and create timeoffset, extrinsic, and intrinsic
   for (int i = 0; i < op->lidar->max_n; i++) {
     // Allocate timeoffset
     auto dt = make_shared<ov_type::Vec>(1);
@@ -459,17 +460,20 @@ void State::build_polynomial_data(bool fej) {
 
     Matrix3d R_GtoI0 = fej ? poses.at(0)->Rot_fej() : poses.at(0)->Rot();
     Vector3d p_I0inG = fej ? poses.at(0)->pos_fej() : poses.at(0)->pos();
+    // 构建姿态与位置差分向量 李代数形式
     for (int i = 1; i <= op->intr_order; i++) {
       Matrix3d R_GtoIi_temp = fej ? poses.at(i)->Rot_fej() : poses.at(i)->Rot();
       Vector3d p_IiinG_temp = fej ? poses.at(i)->pos_fej() : poses.at(i)->pos();
       diff_vec_ori.block(3 * (i - 1), 0, 3, 1) = log_so3(R_GtoIi_temp * R_GtoI0.transpose());
       diff_vec_pos.block(3 * (i - 1), 0, 3, 1) = p_IiinG_temp - p_I0inG;
     }
-
+    // 存入pData
     pData.diff_vec_ori = diff_vec_ori;
     pData.diff_vec_pos = diff_vec_pos;
 
     // Matirx that holds the constraints used to solve for coefficients
+    // 构造用于解多项式系数的矩阵 V_t
+    // essay appendix G last page V
     // V_t*coeffs_ori =  diff_vec_ori
     // V_t*coeffs_pos =  diff_vec_pos
     MatrixXd V_t(3 * op->intr_order, 3 * op->intr_order);
@@ -486,6 +490,7 @@ void State::build_polynomial_data(bool fej) {
     pData.V_t_inv = V_t_inv;
 
     // Compute coefficients of the polynomial
+    // 多项式系数
     VectorXd coeffs_ori = V_t_inv * diff_vec_ori;
     VectorXd coeffs_pos = V_t_inv * diff_vec_pos;
 
@@ -496,7 +501,7 @@ void State::build_polynomial_data(bool fej) {
     MatrixXd dbp_dp0(3 * op->intr_order, 3);
 
     for (int i = 0; i <= op->intr_order - 1; i++) {
-
+      // 雅可比矩阵推导：对初始姿态与位置求导
       // Build jacobians
       Matrix3d R_GtoIi_temp = fej ? poses.at(i + 1)->Rot_fej() : poses.at(i + 1)->Rot();
       Matrix3d R_o_to_i = R_GtoIi_temp * R_GtoI0.transpose();
@@ -542,6 +547,7 @@ void State::add_polynomial(bool fej) {
     clones.find(it->first) == clones.end() ? _polynomial_est.erase(it++) : it++;
 
   // grab last poses
+  // 数据准备：获取最近的n+1个克隆姿态（n为多项式阶数）
   auto it = clones.rbegin();
   vector<pair<double, shared_ptr<ov_type::PoseJPL>>> poses;
   for (int i = 0; i < op->intr_order + 1; i++) {
@@ -552,6 +558,7 @@ void State::add_polynomial(bool fej) {
   reverse(poses.begin(), poses.end());
 
   // Compute
+  // 基准姿态初始化（使用FEJ或最新估计值）
   Matrix3d R_GtoI0 = fej ? poses.at(0).second->Rot_fej() : poses.at(0).second->Rot();
   Vector3d p_I0inG = fej ? poses.at(0).second->pos_fej() : poses.at(0).second->pos();
   VectorXd diff_vec_ori(3 * op->intr_order, 1);
@@ -560,6 +567,7 @@ void State::add_polynomial(bool fej) {
   MatrixXd dbth_dth0(3 * op->intr_order, 3);
   MatrixXd dbp_dp0(3 * op->intr_order, 3);
   vector<MatrixXd> JlinOtoiInv;
+  // 构建差分矩阵核心逻辑
   for (int i = 0; i < op->intr_order; i++) {
     // compute relative pose
     Matrix3d R_GtoIi = fej ? poses.at(i + 1).second->Rot_fej() : poses.at(i + 1).second->Rot();
@@ -568,12 +576,15 @@ void State::add_polynomial(bool fej) {
     Vector3d th_I0toIi = log_so3(R_I0toIi);
 
     // Get Do, Dp, Dt matrix
+    // 构建姿态/位置差分向量
     diff_vec_ori.block(3 * i, 0, 3, 1) = th_I0toIi;
     diff_vec_pos.block(3 * i, 0, 3, 1) = p_IiinG - p_I0inG;
+    // 构造范德蒙矩阵（时间多项式矩阵）
     for (int j = 0; j < op->intr_order; j++)
       V_t.block(3 * i, 3 * j, 3, 3) = pow(poses.at(i + 1).first - poses.at(0).first, j + 1) * Matrix3d::Identity();
 
     // Compute Jacobians
+    // 计算雅可比矩阵
     MatrixXd JlinOtoi_inv = Jl_so3(th_I0toIi).inverse();
     JlinOtoiInv.push_back(JlinOtoi_inv);
     dbth_dth0.block(3 * i, 0, 3, 3) = JlinOtoi_inv * R_I0toIi;
@@ -584,6 +595,7 @@ void State::add_polynomial(bool fej) {
   pData.diff_vec_ori = diff_vec_ori;
   pData.diff_vec_pos = diff_vec_pos;
   pData.V_t_inv = V_t.inverse();
+  // a = V^-1 * y 
   pData.coeffs_ori = pData.V_t_inv * pData.diff_vec_ori;
   pData.coeffs_pos = pData.V_t_inv * pData.diff_vec_pos;
   pData.dbth_dth0 = dbth_dth0;
@@ -591,6 +603,7 @@ void State::add_polynomial(bool fej) {
   pData.JlinOtoiInv = JlinOtoiInv;
 
   // insert polynomial
+  // 数据存储：根据FEJ标志存入不同容器
   fej ? _polynomial_fej[poses.at(0).first] = pData : _polynomial_est[poses.at(0).first] = pData;
 }
 
@@ -661,14 +674,21 @@ bool State::get_interpolated_pose_imu(double t_given, Matrix3d &RGtoI, Vector3d 
   }
 
   // Compute pose
+  // 从CPI缓存中获取预积分结果
   auto cpi = cpis.at(t_given);
-  Matrix3d R_I0toIk = cpi.R_I0toIk;
-  Vector3d alpha = cpi.alpha_I0toIk;
-  Matrix3d RGtoI0 = clones.at(cpi.clone_t)->Rot();
-  Vector3d pI0inG = clones.at(cpi.clone_t)->pos();
-  Vector3d vI0inG = cpis.at(cpi.clone_t).v;
+  // 提取预积分量
+  Matrix3d R_I0toIk = cpi.R_I0toIk;      // 从初始时刻到当前时刻的相对旋转
+  Vector3d alpha = cpi.alpha_I0toIk;      // 位置积分量（考虑加速度计和科氏力）
+  Matrix3d RGtoI0 = clones.at(cpi.clone_t)->Rot();  // 初始时刻的全局到IMU旋转
+  Vector3d pI0inG = clones.at(cpi.clone_t)->pos();  // 初始时刻的IMU全局位置
+  Vector3d vI0inG = cpis.at(cpi.clone_t).v;         // 初始速度
+  // 计算当前时刻的旋转矩阵（链式旋转）
   RGtoI = R_I0toIk * RGtoI0;
-  pIinG = pI0inG + vI0inG * cpi.dt - 0.5 * op->gravity * cpi.dt * cpi.dt + RGtoI0.transpose() * alpha;
+  // 计算当前时刻的位置（运动学方程）
+  pIinG = pI0inG                          // 初始位置
+        + vI0inG * cpi.dt                 // 速度积分项
+        - 0.5 * op->gravity * cpi.dt * cpi.dt  // 重力补偿项 
+        + RGtoI0.transpose() * alpha;      // 预积分位置增量（转换到全局系）
   return true;
 }
 

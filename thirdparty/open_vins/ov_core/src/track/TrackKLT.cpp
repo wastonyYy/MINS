@@ -54,6 +54,7 @@ void TrackKLT::feed_new_camera(const CameraData &message) {
     std::lock_guard<std::mutex> lck(mtx_feeds.at(cam_id));
 
     // Histogram equalize
+    // 图像增强处理
     cv::Mat img;
     if (histogram_method == HistogramMethod::HISTOGRAM) {
       cv::equalizeHist(message.images.at(msg_id), img);
@@ -391,7 +392,7 @@ void TrackKLT::feed_stereo(const CameraData &message, size_t msg_id_left, size_t
             (int)good_left.size());
   PRINT_ALL("[TIME-KLT]: %.4f seconds for total\n", (rT6 - rT1).total_microseconds() * 1e-6);
 }
-
+// 对上一帧成功跟踪到的特征点检测最小距离，划分最小距离网格，每个最小网格里只能有一个特征点
 void TrackKLT::perform_detection_monocular(const std::vector<cv::Mat> &img0pyr, const cv::Mat &mask0, std::vector<cv::KeyPoint> &pts0,
                                            std::vector<size_t> &ids0) {
 
@@ -825,7 +826,7 @@ void TrackKLT::perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, con
     }
   }
 }
-
+// 图像特征点匹配去除奇异点
 void TrackKLT::perform_matching(const std::vector<cv::Mat> &img0pyr, const std::vector<cv::Mat> &img1pyr, std::vector<cv::KeyPoint> &kpts0,
                                 std::vector<cv::KeyPoint> &kpts1, size_t id0, size_t id1, std::vector<uchar> &mask_out) {
 
